@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Scribely</string>
+    <string name="title_activity_http_login">HttpLogin</string>
+</resources>
