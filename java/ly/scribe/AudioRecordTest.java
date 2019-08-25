@@ -30,6 +30,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -272,43 +273,94 @@ public class AudioRecordTest extends AppCompatActivity {
     }
 
     private Boolean sendReceiveRequest(String fileName, Context context) {
-        HttpURLConnection connection;
-        DataOutputStream request = null;
-        Boolean success = false;
-
         try {
-            ///data/user/0/ly.scribe/files/audiorecordtest.mp4: open failed: ENOENT (No such file or directory)
-            FileInputStream inputStream =  context.openFileInput(fileName);
-            if (inputStream == null) {
-                Log.e("ApiCall","file was null");
-                return null;
+            final String finalFileName = fileName;
+            final Context finalContext = context;
+            boolean writeComplete = writeAudioToAWS(context, fileName);
+            if (writeComplete) {
+                Thread getProcessedResultThread = new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try  {
+                            getParsedAudio(finalContext, finalFileName);
+                            //Your code goes here
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    }
+                });
+
+                getProcessedResultThread.start();
             }
-
-            byte[] binaryData = IOUtils.toByteArray(inputStream);
-
-            URL url = null;
-
-            url = new URL("http://scribely.s3.amazonaws.com/" + fileName);
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/octet-stream");
-            connection.setRequestProperty("x-amz-acl", "public-read-write");
-            connection.setRequestMethod("PUT");
-            request = new DataOutputStream(connection.getOutputStream());
-
-            request.write(binaryData);
-            request.flush();
-            request.close();
-            String line = "";
-            if (connection.getResponseCode() != 200) {
-                success = false;
-            }
-            success = true;
 
         } catch(IOException e) {
             e.printStackTrace();
         }
-        return success;
+        return true;
+    }
+
+    private String getParsedAudio (Context context, String fileName) throws IOException, InterruptedException {
+
+        String parsedAudio = null;
+        int napsTaken = 0;
+        final int NAP_LENGTH = 5000;
+        final int MAX_NAPS = 50;
+
+        while(napsTaken < MAX_NAPS) {
+            URL responseUrl = new URL("http://scribely.s3.amazonaws.com/" + fileName + ".json");
+            HttpURLConnection responseConn = (HttpURLConnection) responseUrl.openConnection();
+            responseConn.setRequestMethod("GET");
+            responseConn.setRequestProperty("x-amz-acl", "public-read-write");
+            if (responseConn.getResponseCode() == 404) {
+                responseConn.disconnect(); // probably should do this
+                Thread.sleep(NAP_LENGTH);
+                napsTaken += 1;
+            } else if (responseConn.getResponseCode() == 200) {
+                Log.e("AudieRecordTest", "data has been parsed finally!");
+                BufferedReader in = new BufferedReader(
+                        new InputStreamReader(responseConn.getInputStream()));
+                String inputLine;
+                StringBuilder response = new StringBuilder();
+
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
+                parsedAudio = response.toString();
+                in.close();
+                break;
+            }
+        }
+        return parsedAudio;
+
+    }
+    private boolean writeAudioToAWS (Context context, String fileName) throws IOException {
+        HttpURLConnection connection;
+        DataOutputStream request = null;
+
+        FileInputStream inputStream =  context.openFileInput(fileName);
+        if (inputStream == null) {
+            Log.e("ApiCall","file was null");
+            return false;
+        }
+
+        byte[] binaryData = IOUtils.toByteArray(inputStream);
+
+        URL url = null;
+
+        url = new URL("http://scribely.s3.amazonaws.com/" + fileName);
+        connection = (HttpURLConnection) url.openConnection();
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/octet-stream");
+        connection.setRequestProperty("x-amz-acl", "public-read-write");
+        connection.setRequestMethod("PUT");
+        request = new DataOutputStream(connection.getOutputStream());
+
+        request.write(binaryData);
+        request.flush();
+        request.close();
+        inputStream.close();
+
+        return connection.getResponseCode() == 200;
     }
 
     private String parseAudioResponse(String parsedAudio) {
